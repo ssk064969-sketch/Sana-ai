@@ -7,7 +7,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: unzip -q SanaAI*.zip
+      - name: Unzip project
+        run: |
+          ls -la
+          ZIP=$(find . -maxdepth 1 -iname '*.zip' | head -n 1)
+          echo "Zip mili: $ZIP"
+          mkdir work
+          unzip -q "$ZIP" -d work
+          DIR=$(dirname "$(find work -name settings.gradle.kts | head -n 1)")
+          echo "Project folder: $DIR"
+          echo "DIR=$DIR" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -15,9 +24,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - run: gradle assembleDebug --no-daemon
-        working-directory: SanaAI
+      - name: Build APK
+        run: |
+          cd "$DIR"
+          gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: SanaAI-apk
-          path: SanaAI/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.DIR }}/app/build/outputs/apk/debug/app-debug.apk

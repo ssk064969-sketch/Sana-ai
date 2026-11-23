@@ -1,34 +1,88 @@
-name: Build Sana APK
+
+name: Build Sana AI Release APK
+
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Unzip project
         run: |
-          ls -la
           ZIP=$(find . -maxdepth 1 -iname '*.zip' | head -n 1)
-          echo "Zip mili: $ZIP"
+          test -n "$ZIP"
           mkdir work
           unzip -q "$ZIP" -d work
           DIR=$(dirname "$(find work -name settings.gradle.kts | head -n 1)")
-          echo "Project folder: $DIR"
+          test -f "$DIR/app/build.gradle.kts"
           echo "DIR=$DIR" >> "$GITHUB_ENV"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Build APK
+
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$DIR/sana-release.jks"
+          test -s "$DIR/sana-release.jks"
+
+      - name: Configure release signing
+        run: |
+          python3 - "$DIR/app/build.gradle.kts" <<'PY'
+          import sys
+          from pathlib import Path
+
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          needle = '    kotlinOptions { jvmTarget = "17" }\n}'
+          replacement = '''    signingConfigs {
+              create("release") {
+                  storeFile = file("sana-release.jks")
+                  storePassword = System.getenv("KEYSTORE_PASSWORD")
+                  keyAlias = System.getenv("KEYSTORE_ALIAS")
+                  keyPassword = System.getenv("KEYSTORE_PASSWORD")
+              }
+          }
+          buildTypes {
+              getByName("release") {
+                  signingConfig = signingConfigs.getByName("release")
+                  isMinifyEnabled = false
+              }
+          }
+          kotlinOptions { jvmTarget = "17" }
+          }'''
+          if needle not in s:
+              raise SystemExit("Expected Gradle configuration not found")
+          p.write_text(s.replace(needle, replacement, 1))
+          PY
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
         run: |
           cd "$DIR"
-          gradle assembleDebug --no-daemon
+          gradle assembleRelease --no-daemon
+
       - uses: actions/upload-artifact@v4
         with:
-          name: SanaAI-apk
-          path: ${{ env.DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          name: SanaAI-Release
+          path: ${{ env.DIR }}/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          

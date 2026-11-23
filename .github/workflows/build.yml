@@ -1,4 +1,3 @@
-
 name: Build Sana AI Release APK
 
 on:
@@ -38,9 +37,28 @@ jobs:
       - name: Decode release keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
         run: |
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$DIR/app/sana-release.jks"
-          test -s "$DIR/sana-release.jks"
+          set -e
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 secret is empty"
+            exit 1
+          fi
+
+          if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$DIR/app/sana-release.jks"; then
+            echo "ERROR: Base64 decode failed"
+            exit 1
+          fi
+
+          test -s "$DIR/app/sana-release.jks"
+
+          keytool -list \
+            -keystore "$DIR/app/sana-release.jks" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEYSTORE_ALIAS" > /dev/null
+
+          echo "Keystore verified successfully"
 
       - name: Configure release signing
         run: |
@@ -50,7 +68,9 @@ jobs:
 
           p = Path(sys.argv[1])
           s = p.read_text()
+
           needle = '    kotlinOptions { jvmTarget = "17" }\n}'
+
           replacement = '''    signingConfigs {
               create("release") {
                   storeFile = file("sana-release.jks")
@@ -67,8 +87,10 @@ jobs:
           }
           kotlinOptions { jvmTarget = "17" }
           }'''
+
           if needle not in s:
               raise SystemExit("Expected Gradle configuration not found")
+
           p.write_text(s.replace(needle, replacement, 1))
           PY
 
@@ -85,4 +107,3 @@ jobs:
           name: SanaAI-Release
           path: ${{ env.DIR }}/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-          

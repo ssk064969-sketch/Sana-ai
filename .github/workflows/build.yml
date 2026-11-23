@@ -1,3 +1,4 @@
+
 name: Build Sana AI Release APK
 
 on:
@@ -17,6 +18,7 @@ jobs:
 
       - name: Unzip project
         run: |
+          set -e
           ZIP=$(find . -maxdepth 1 -iname '*.zip' | head -n 1)
           test -n "$ZIP"
           mkdir work
@@ -40,27 +42,35 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
         run: |
-          set -e
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "ERROR: ANDROID_KEYSTORE_BASE64 secret is empty"
-            exit 1
-          fi
+          set -eu
 
-          if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$DIR/app/sana-release.jks"; then
-            echo "ERROR: Base64 decode failed"
-            exit 1
-          fi
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "BASE64 SECRET EMPTY"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "PASSWORD SECRET EMPTY"; exit 1; }
+          test -n "$KEYSTORE_ALIAS" || { echo "ALIAS SECRET EMPTY"; exit 1; }
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$DIR/app/sana-release.jks"
 
           test -s "$DIR/app/sana-release.jks"
+          echo "BASE64 DECODE OK"
 
-          keytool -list \
-            -keystore "$DIR/app/sana-release.jks" \
-            -storepass "$KEYSTORE_PASSWORD" \
-            -alias "$KEYSTORE_ALIAS" > /dev/null
+          if ! keytool -list -keystore "$DIR/app/sana-release.jks" -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "KEYSTORE OR PASSWORD CHECK FAILED"
+            exit 1
+          fi
 
-          echo "Keystore verified successfully"
+          echo "PASSWORD CHECK OK"
+
+          if ! keytool -list -keystore "$DIR/app/sana-release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEYSTORE_ALIAS" >/dev/null 2>&1; then
+            echo "ALIAS CHECK FAILED"
+            exit 1
+          fi
+
+          echo "ALIAS CHECK OK"
 
       - name: Configure release signing
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
         run: |
           python3 - "$DIR/app/build.gradle.kts" <<'PY'
           import sys
@@ -69,8 +79,10 @@ jobs:
           p = Path(sys.argv[1])
           s = p.read_text()
 
-          needle = '    kotlinOptions { jvmTarget = "17" }\n}'
+          if 'create("release")' in s:
+              raise SystemExit("Release signing already exists; refusing duplicate configuration")
 
+          needle = '    kotlinOptions { jvmTarget = "17" }\n}'
           replacement = '''    signingConfigs {
               create("release") {
                   storeFile = file("sana-release.jks")
@@ -107,3 +119,4 @@ jobs:
           name: SanaAI-Release
           path: ${{ env.DIR }}/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+          
